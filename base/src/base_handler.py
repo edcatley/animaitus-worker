@@ -334,7 +334,8 @@ def upload_images(images):
 
 def upload_videos(videos):
     """
-    Upload a list of base64 encoded videos to the ComfyUI server using the /upload/video endpoint.
+    Upload a list of base64 encoded videos to the ComfyUI server.
+    ComfyUI has no /upload/video route; /upload/image stores any file type in the input dir.
 
     Args:
         videos (list): A list of dictionaries, each containing the 'name' of the video and the 'video' as a base64 encoded string.
@@ -366,13 +367,13 @@ def upload_videos(videos):
 
             # Prepare the form data
             files = {
-                "video": (name, BytesIO(blob), "video/mp4"),
+                "image": (name, BytesIO(blob), "video/mp4"),
                 "overwrite": (None, "true"),
             }
 
-            # POST request to upload the video
+            # POST request to upload the video (via /upload/image - see docstring)
             response = requests.post(
-                f"http://{COMFY_HOST}/upload/video", files=files, timeout=60
+                f"http://{COMFY_HOST}/upload/image", files=files, timeout=60
             )
             response.raise_for_status()
 
@@ -458,19 +459,17 @@ def download_and_upload_files(download_urls):
             subfolder = ""
             filename = name
 
-        # Auto-detect file type from extension
+        # Auto-detect content type from extension. Everything goes through /upload/image -
+        # ComfyUI has no /upload/video route, and /upload/image stores any file type.
         name_lower = filename.lower()
         if name_lower.endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm')):
-            endpoint = f"http://{COMFY_HOST}/upload/video"
             content_type = "video/mp4"
-            form_field = "video"
         else:
-            endpoint = f"http://{COMFY_HOST}/upload/image"
             content_type = "image/png"
-            form_field = "image"
+        endpoint = f"http://{COMFY_HOST}/upload/image"
 
         files = {
-            form_field: (filename, BytesIO(file_bytes), content_type),
+            "image": (filename, BytesIO(file_bytes), content_type),
             "overwrite": (None, "true"),
         }
 
