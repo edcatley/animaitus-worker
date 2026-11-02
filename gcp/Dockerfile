@@ -8,7 +8,7 @@ RUN uv pip install google-cloud-pubsub google-cloud-secret-manager google-cloud-
 # so no symlink needed — just ensure the path exists as a mount point.
 RUN mkdir -p /network-volume
 
-# Copy GKE scripts
+# Copy GCP worker scripts (Pub/Sub handler, used by Batch and GKE)
 COPY handler.py /handler.py
 COPY model_sync.py /model_sync.py
 

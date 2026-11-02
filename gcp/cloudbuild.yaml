@@ -1,0 +1,129 @@
+steps:
+  # ==========================================================
+  # 1. BUILD BASE IMAGE
+  # ==========================================================
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build-base
+    args:
+      - build
+      - --tag
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:base-latest'
+      - --tag
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:base-$SHORT_SHA'
+      - --cache-from
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:base-latest'
+      - --file
+      - base/Dockerfile
+      - ./base
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push-base
+    waitFor: ['build-base']
+    args:
+      - push
+      - '--all-tags'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui'
+
+  # ==========================================================
+  # 2. BUILD GKE ADAPTER
+  # ==========================================================
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build-gke
+    waitFor: ['push-base']
+    args:
+      - build
+      - --tag
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:gke-latest'
+      - --tag
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:gke-$SHORT_SHA'
+      - --cache-from
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:gke-latest'
+      - --build-arg
+      - 'BASE_IMAGE_NAME=${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:base-latest'
+      - --file
+      - gcp/Dockerfile
+      - ./gcp
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push-gke
+    waitFor: ['build-gke']
+    args:
+      - push
+      - '--all-tags'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui'
+
+  # ==========================================================
+  # 3. BUILD BATCH VM IMAGE
+  # ==========================================================
+  # Boots a temporary (non-GPU) VM that runs batch/vm-image-setup.sh: NVIDIA
+  # driver + container toolkit + the gke image above pre-pulled. The disk is
+  # saved into the image family that Batch workers boot from, so they start
+  # in seconds instead of installing drivers and pulling ~10 GB every time.
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: build-vm-image
+    waitFor: ['push-gke']
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        BUILDER="vm-image-builder-$$(echo "$BUILD_ID" | cut -c1-8)"
+        IMAGE="${_VM_IMAGE_FAMILY}-$$(date -u +%Y%m%d-%H%M%S)"
+        ZONE="${_REGION}-a"
+
+        # Never leave a builder VM behind, whatever happens below
+        trap 'gcloud compute instances delete "$$BUILDER" --zone "$$ZONE" --quiet || true' EXIT
+
+        attr() {
+          gcloud compute instances get-guest-attributes "$$BUILDER" --zone "$$ZONE" \
+            --query-path "build/$$1" --format='value(value)' 2>/dev/null || true
+        }
+        vm_status() {
+          gcloud compute instances describe "$$BUILDER" --zone "$$ZONE" --format='value(status)'
+        }
+
+        gcloud compute instances create "$$BUILDER" \
+          --zone "$$ZONE" \
+          --machine-type n2-standard-8 \
+          --image-family batch-debian-12-official --image-project batch-custom-image \
+          --boot-disk-size 60GB --boot-disk-type pd-balanced \
+          --service-account "${_WORKER_SA}" --scopes cloud-platform \
+          --metadata "worker-image=${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:gke-$SHORT_SHA,enable-guest-attributes=TRUE" \
+          --metadata-from-file startup-script=batch/vm-image-setup.sh
+
+        STATUS=""
+        while [ -z "$$STATUS" ] && [ "$$(vm_status)" != "TERMINATED" ]; do
+          sleep 30
+          STATUS="$$(attr status)"
+        done
+        echo "VM setup status: $${STATUS:-<none reported>}"
+
+        if [[ "$$STATUS" != DONE* ]]; then
+          echo "VM setup failed. Last log lines:"
+          attr log
+          exit 1
+        fi
+
+        while [ "$$(vm_status)" != "TERMINATED" ]; do sleep 15; done
+        gcloud compute images create "$$IMAGE" \
+          --source-disk "$$BUILDER" --source-disk-zone "$$ZONE" \
+          --family "${_VM_IMAGE_FAMILY}" --storage-location "${_REGION}"
+
+        # Keep the newest 3 images in the family for rollback; delete the rest
+        gcloud compute images list --filter="family=${_VM_IMAGE_FAMILY}" \
+          --sort-by=~creationTimestamp --format='value(name)' | tail -n +4 \
+          | xargs -r -n1 gcloud compute images delete --quiet
+
+        echo "Built $$IMAGE"
+
+substitutions:
+  _PROJECT_ID: animaitus
+  _REGION: europe-west4
+  _REPO: animaitus-repo
+  _VM_IMAGE_FAMILY: animaitus-worker
+  _WORKER_SA: animaitus-worker-gsa@animaitus.iam.gserviceaccount.com
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: '7200s'
