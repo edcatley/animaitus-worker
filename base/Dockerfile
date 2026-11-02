@@ -1,9 +1,9 @@
-# 1. SETUP THE BASE (CUDA 13.0)
-ARG BASE_IMAGE=nvidia/cuda:13.0.0-devel-ubuntu24.04
+# 1. SETUP THE BASE (CUDA 13.2)
+ARG BASE_IMAGE=nvidia/cuda:13.2.1-devel-ubuntu24.04
 FROM ${BASE_IMAGE} AS base
 
 # 2. SETUP ARGS
-ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu132
 ARG COMFYUI_VERSION=latest
 
 # Added CMAKE_BUILD_PARALLEL_LEVEL back for faster compilation
@@ -36,7 +36,9 @@ ENV PATH="/opt/venv/bin:${PATH}" \
 RUN uv pip install comfy-cli pip setuptools wheel ninja
 
 # Install PyTorch (This is fine to do manually to force the CUDA version)
-RUN uv pip install --no-cache-dir torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url ${PYTORCH_INDEX_URL}
+RUN uv pip install --no-cache-dir torch==2.14.1 torchvision==0.29.1 --index-url ${PYTORCH_INDEX_URL}
+# torchaudio has no cu132 build (its last release is 2.11, requiring torch>=2.11), so it comes from PyPI
+RUN uv pip install --no-cache-dir torchaudio==2.11.1
 # Install ComfyUI
 RUN /usr/bin/yes | comfy --workspace /comfyui install --version "${COMFYUI_VERSION}" --nvidia \
     && uv pip install --no-cache-dir -r /comfyui/requirements.txt
