@@ -1,4 +1,8 @@
 steps:
+  # Images are pushed as animaitus-worker (base-*, gcp-*). They are also pushed
+  # under the legacy name wan2-comfyui (base-*, gke-*) until the Batch job config
+  # has switched over; then delete the _LEGACY_IMAGE tags below.
+
   # ==========================================================
   # 1. BUILD BASE IMAGE
   # ==========================================================
@@ -7,11 +11,15 @@ steps:
     args:
       - build
       - --tag
-      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:base-latest'
+      - '${_REGISTRY}/${_IMAGE}:base-latest'
       - --tag
-      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:base-$SHORT_SHA'
+      - '${_REGISTRY}/${_IMAGE}:base-$SHORT_SHA'
+      - --tag
+      - '${_REGISTRY}/${_LEGACY_IMAGE}:base-latest'
+      - --tag
+      - '${_REGISTRY}/${_LEGACY_IMAGE}:base-$SHORT_SHA'
       - --cache-from
-      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:base-latest'
+      - '${_REGISTRY}/${_IMAGE}:base-latest'
       - --file
       - base/Dockerfile
       - ./base
@@ -19,49 +27,49 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     id: push-base
     waitFor: ['build-base']
-    args:
-      - push
-      - '--all-tags'
-      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui'
+    entrypoint: bash
+    args: ['-c', 'docker push --all-tags ${_REGISTRY}/${_IMAGE} && docker push --all-tags ${_REGISTRY}/${_LEGACY_IMAGE}']
 
   # ==========================================================
-  # 2. BUILD GKE ADAPTER
+  # 2. BUILD GCP WORKER (Pub/Sub handler, runs on Batch or GKE)
   # ==========================================================
   - name: 'gcr.io/cloud-builders/docker'
-    id: build-gke
+    id: build-gcp
     waitFor: ['push-base']
     args:
       - build
       - --tag
-      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:gke-latest'
+      - '${_REGISTRY}/${_IMAGE}:gcp-latest'
       - --tag
-      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:gke-$SHORT_SHA'
+      - '${_REGISTRY}/${_IMAGE}:gcp-$SHORT_SHA'
+      - --tag
+      - '${_REGISTRY}/${_LEGACY_IMAGE}:gke-latest'
+      - --tag
+      - '${_REGISTRY}/${_LEGACY_IMAGE}:gke-$SHORT_SHA'
       - --cache-from
-      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:gke-latest'
+      - '${_REGISTRY}/${_IMAGE}:gcp-latest'
       - --build-arg
-      - 'BASE_IMAGE_NAME=${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:base-latest'
+      - 'BASE_IMAGE_NAME=${_REGISTRY}/${_IMAGE}:base-$SHORT_SHA'
       - --file
       - gcp/Dockerfile
       - ./gcp
 
   - name: 'gcr.io/cloud-builders/docker'
-    id: push-gke
-    waitFor: ['build-gke']
-    args:
-      - push
-      - '--all-tags'
-      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui'
+    id: push-gcp
+    waitFor: ['build-gcp']
+    entrypoint: bash
+    args: ['-c', 'docker push --all-tags ${_REGISTRY}/${_IMAGE} && docker push --all-tags ${_REGISTRY}/${_LEGACY_IMAGE}']
 
   # ==========================================================
   # 3. BUILD BATCH VM IMAGE
   # ==========================================================
   # Boots a temporary (non-GPU) VM that runs batch/vm-image-setup.sh: NVIDIA
-  # driver + container toolkit + the gke image above pre-pulled. The disk is
+  # driver + container toolkit + the gcp image above pre-pulled. The disk is
   # saved into the image family that Batch workers boot from, so they start
   # in seconds instead of installing drivers and pulling ~10 GB every time.
   - name: 'gcr.io/cloud-builders/gcloud'
     id: build-vm-image
-    waitFor: ['push-gke']
+    waitFor: ['push-gcp']
     entrypoint: bash
     args:
       - -c
@@ -88,7 +96,7 @@ steps:
           --image-family batch-debian-12-official --image-project batch-custom-image \
           --boot-disk-size 60GB --boot-disk-type pd-balanced \
           --service-account "${_WORKER_SA}" --scopes cloud-platform \
-          --metadata "worker-image=${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/wan2-comfyui:gke-$SHORT_SHA,enable-guest-attributes=TRUE" \
+          --metadata "worker-image=${_REGISTRY}/${_IMAGE}:gcp-$SHORT_SHA,enable-guest-attributes=TRUE" \
           --metadata-from-file startup-script=batch/vm-image-setup.sh
 
         STATUS=""
@@ -120,10 +128,14 @@ substitutions:
   _PROJECT_ID: animaitus
   _REGION: europe-west4
   _REPO: animaitus-repo
+  _REGISTRY: ${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}
+  _IMAGE: animaitus-worker
+  _LEGACY_IMAGE: wan2-comfyui
   _VM_IMAGE_FAMILY: animaitus-worker
   _WORKER_SA: animaitus-worker-gsa@animaitus.iam.gserviceaccount.com
 
 options:
   logging: CLOUD_LOGGING_ONLY
+  dynamicSubstitutions: true  # _REGISTRY is built from other substitutions
 
 timeout: '7200s'
