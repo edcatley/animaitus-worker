@@ -1,8 +1,4 @@
 steps:
-  # Images are pushed as animaitus-worker (base-*, gcp-*). They are also pushed
-  # under the legacy name wan2-comfyui (base-*, gke-*) until the Batch job config
-  # has switched over; then delete the _LEGACY_IMAGE tags below.
-
   # ==========================================================
   # 1. BUILD BASE IMAGE
   # ==========================================================
@@ -14,10 +10,6 @@ steps:
       - '${_REGISTRY}/${_IMAGE}:base-latest'
       - --tag
       - '${_REGISTRY}/${_IMAGE}:base-$SHORT_SHA'
-      - --tag
-      - '${_REGISTRY}/${_LEGACY_IMAGE}:base-latest'
-      - --tag
-      - '${_REGISTRY}/${_LEGACY_IMAGE}:base-$SHORT_SHA'
       - --cache-from
       - '${_REGISTRY}/${_IMAGE}:base-latest'
       - --file
@@ -27,8 +19,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     id: push-base
     waitFor: ['build-base']
-    entrypoint: bash
-    args: ['-c', 'docker push --all-tags ${_REGISTRY}/${_IMAGE} && docker push --all-tags ${_REGISTRY}/${_LEGACY_IMAGE}']
+    args: ['push', '--all-tags', '${_REGISTRY}/${_IMAGE}']
 
   # ==========================================================
   # 2. BUILD GCP WORKER (Pub/Sub handler, runs on Batch or GKE)
@@ -42,10 +33,6 @@ steps:
       - '${_REGISTRY}/${_IMAGE}:gcp-latest'
       - --tag
       - '${_REGISTRY}/${_IMAGE}:gcp-$SHORT_SHA'
-      - --tag
-      - '${_REGISTRY}/${_LEGACY_IMAGE}:gke-latest'
-      - --tag
-      - '${_REGISTRY}/${_LEGACY_IMAGE}:gke-$SHORT_SHA'
       - --cache-from
       - '${_REGISTRY}/${_IMAGE}:gcp-latest'
       - --build-arg
@@ -57,8 +44,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     id: push-gcp
     waitFor: ['build-gcp']
-    entrypoint: bash
-    args: ['-c', 'docker push --all-tags ${_REGISTRY}/${_IMAGE} && docker push --all-tags ${_REGISTRY}/${_LEGACY_IMAGE}']
+    args: ['push', '--all-tags', '${_REGISTRY}/${_IMAGE}']
 
   # ==========================================================
   # 3. BUILD BATCH VM IMAGE
@@ -130,7 +116,6 @@ substitutions:
   _REPO: animaitus-repo
   _REGISTRY: ${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}
   _IMAGE: animaitus-worker
-  _LEGACY_IMAGE: wan2-comfyui
   _VM_IMAGE_FAMILY: animaitus-worker
   _WORKER_SA: animaitus-worker-gsa@animaitus.iam.gserviceaccount.com
 
