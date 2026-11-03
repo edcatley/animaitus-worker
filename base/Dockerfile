@@ -68,7 +68,14 @@ COPY requirements.txt .
 RUN uv pip install --no-cache-dir -r requirements.txt
 
 # Install SageAttention from source (must be after torch, requires --no-build-isolation)
-RUN MAX_JOBS=1 CUDA_HOME=/usr/local/cuda uv pip install --no-build-isolation git+https://github.com/thu-ml/SageAttention.git@v2.2.0
+# Its setup.py forces -std=c++17, but PyTorch 2.13+ headers need C++20. Removing the
+# flag lets torch.utils.cpp_extension pick the standard for the installed PyTorch.
+# Upstream issue: https://github.com/thu-ml/SageAttention/pull/405
+RUN git clone --depth 1 --branch v2.2.0 https://github.com/thu-ml/SageAttention.git /tmp/SageAttention \
+    && sed -i 's/"-std=c++17",[[:space:]]*//g' /tmp/SageAttention/setup.py \
+    && ! grep -q 'std=c++17' /tmp/SageAttention/setup.py \
+    && MAX_JOBS=1 CUDA_HOME=/usr/local/cuda uv pip install --no-build-isolation /tmp/SageAttention \
+    && rm -rf /tmp/SageAttention
 
 # Copy generic base handler (used by platform-specific wrappers)
 COPY src/ /src/
