@@ -22,7 +22,8 @@ python -u /comfyui/main.py \
     --disable-auto-launch \
     --disable-metadata \
     --verbose "${COMFY_LOG_LEVEL}" \
-    --log-stdout &
+    --log-stdout \
+    --use-ck-attention &
 
 echo "worker-comfyui - Starting handler..."
 exec python -u /handler.py
